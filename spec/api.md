@@ -56,6 +56,7 @@ REST/JSON over HTTP, same-origin, served by FastAPI under `/api`. All responses 
 **Purpose:** Download the query's result/cleaned data as a file.
 | Status | Condition |
 |--------|-----------|
+| 400 | invalid/unknown `format` value (must be csv or xlsx) |
 | 404 | unknown query |
 | 500 | export build failure |
 

@@ -15,8 +15,9 @@ An uploaded tabular file in the persistent library.
 |-------|------|----------|-------------|
 | id | str (uuid) | yes | Primary key |
 | name | str | yes | Display name (defaults to filename) |
+| filename | str | yes | Original uploaded file name |
 | source_format | str | yes | csv \| xlsx \| pdf |
-| file_path | str | yes | Local path to the stored raw file |
+| local_path | str | yes | Canonical local CSV path the executor reads |
 | row_count | int | yes | Rows |
 | col_count | int | yes | Columns |
 | masked_sample | JSON (text) | yes | ≤5 PII-masked rows — the only rows allowed to reach the LLM |
@@ -50,6 +51,7 @@ One natural-language question and its answer.
 |-------|------|----------|-------------|
 | id | str (uuid) | yes | Primary key (also the graph run_id) |
 | session_id | str (FK) | no | → Session.id (Phase 2; null in Phase 1) |
+| dataset_ids | JSON (text) | no | Active dataset id(s) for this query (multi-file support) |
 | question | str | yes | User question |
 | plan | str | no | Agent strategy |
 | answer | str | no | Prose + key numbers |

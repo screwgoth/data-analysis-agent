@@ -65,15 +65,20 @@ class AgentState(TypedDict, total=False):
     # Input
     question: str                     # from the trigger
     dataset_ids: list[str]            # active dataset(s)
+    dataset_paths: list               # local file path(s) — read only in the sandbox
     schema_context: str               # profile summary (from DatasetProfile)
     masked_sample: str                # PII-masked sample rows — ONLY data seen by LLM
     history: list                     # prior turns [{question, answer}] (Phase 2)
+    join_context: str                 # multi-dataset merge guidance (Phase 3)
+    proposed_join_key: str | None     # detected shared join column (Phase 3)
 
     # Pipeline data (populated progressively)
     plan: str                         # from plan node
+    pending_code: str                 # code awaiting execution
     steps: list                       # [{code, stdout, result_json, error, duration_ms}]
     current_step: int                 # loop counter
     max_steps: int                    # bound, default 6
+    reflect_done: bool                # reflect decision: answer when True
 
     # Output
     answer: str                       # prose + key numbers
@@ -115,8 +120,12 @@ class AgentState(TypedDict, total=False):
 **LLM:** yes — structured `{done, reason}`. Loops to write_code if not done AND `current_step < max_steps`, else to answer.
 
 ### `node_answer`
-**Reads:** steps, question, plan. **Writes:** answer, shown_code, assumptions, (Phase 2) chart_spec, suggestions; token_usage.
-**LLM:** yes — composes prose + key numbers; assembles the shown code; flags assumptions.
+**Reads:** steps, question, plan. **Writes:** answer, shown_code, assumptions, (Phase 2) chart_spec; token_usage.
+**LLM:** yes — composes prose + key numbers; assembles the shown code; flags assumptions; produces `chart_spec` (NOT suggestions).
+
+### `node_suggest`
+**Reads:** question, answer, schema_context. **Writes:** suggestions; token_usage.
+**LLM:** yes — `gemini-2.5-flash` (light, latency-sensitive) — produces 2–3 follow-up question suggestions. Runs between `answer` and `finalize`.
 
 ### `node_finalize` / `node_handle_error`
 Persist final `Query` status/outputs; handle_error sets status=failed with the surfaced message.
@@ -146,6 +155,9 @@ node_reflect
 node_answer ──(error)────────────► node_handle_error
   │
   ▼
+node_suggest
+  │
+  ▼
 node_finalize ──► END
 ```
 
@@ -160,6 +172,9 @@ node_finalize ──► END
 | node_reflect | not done AND `current_step < max_steps` | node_write_code |
 | node_reflect | done OR limit reached | node_answer |
 | node_answer | `state["error"]` | node_handle_error |
+| node_answer | else | node_suggest |
+
+(`node_suggest → node_finalize` and `node_finalize → END` are unconditional edges.)
 
 (A pandas code error is NOT a fatal `state["error"]` — it is a captured step that reflect handles. Only infra failures set `error`.)
 
@@ -230,6 +245,7 @@ graph.add_node("write_code", node_write_code)
 graph.add_node("execute_local", node_execute_local)
 graph.add_node("reflect", node_reflect)
 graph.add_node("answer", node_answer)
+graph.add_node("suggest", node_suggest)
 graph.add_node("finalize", node_finalize)
 graph.add_node("handle_error", node_handle_error)
 
@@ -247,7 +263,8 @@ graph.add_conditional_edges("execute_local", err_or, {
 graph.add_conditional_edges("reflect", route_after_reflect, {
     "write_code": "write_code", "answer": "answer"})
 graph.add_conditional_edges("answer", err_or, {
-    "handle_error": "handle_error", "finalize": "finalize"})
+    "handle_error": "handle_error", "suggest": "suggest"})
+graph.add_edge("suggest", "finalize")
 graph.add_edge("finalize", END)
 graph.add_edge("handle_error", END)
 
