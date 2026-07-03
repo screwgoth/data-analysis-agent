@@ -1,4 +1,58 @@
-# Zero Shot SDD Harness for Building Agents
+# Local Data Analysis Agent
+
+> **All commands run from the repo root** (where `pyproject.toml` and `alembic.ini` live). There is no subdirectory to `cd` into (except the one-time `cd frontend` for the UI build). Every Python command is prefixed with `uv run` — bare `python`/`alembic`/`pytest` will fail unless the venv is manually activated.
+
+A single-user, fully-local browser app: upload a CSV, get an auto-generated profile, ask a question in natural language, and receive a prose answer with the key numbers plus the exact pandas code the agent wrote and ran **locally** against your real data. Raw data never leaves the machine — only the schema and a PII-masked sample reach the LLM (Google Gemini).
+
+## Phase 1 — Upload, Profile, Ask, Answer
+
+Phase 1 delivers the real end-to-end path: CSV upload → profile → one question → bounded plan→write-code→execute→reflect→answer loop → prose answer with the collapsible code/step trace. The dataset-library sidebar, charts, follow-up suggestions, token badge, multi-file join, and export are clearly-labelled non-functional stubs until later phases.
+
+### Prerequisites — environment
+
+Set these in `.env` (gitignored; presence only, never commit keys):
+
+```
+AGENT_GEMINI_API_KEY=<your Gemini key>
+AGENT_LLM_PROVIDER=gemini
+AGENT_LLM_MODEL=gemini-2.5-pro
+AGENT_DATABASE_URL=sqlite:///./data/agent.db   # optional; this is the default
+```
+
+Optional: `LANGCHAIN_API_KEY` enables LangSmith tracing.
+
+### Set up + migrate the database
+
+```bash
+uv sync --extra dev
+uv run alembic upgrade head
+uv run alembic current      # must print a revision hash (e.g. d846a1ecafa8 (head)), not blank
+```
+
+### Run the app
+
+```bash
+cd frontend && pnpm build && cd ..   # builds the Next.js static export into frontend/out
+uv run python -m src                 # starts the server on port 8001
+```
+
+Then open **http://localhost:8001/app/**. Upload a CSV, confirm the profile panel, ask e.g. "What is the total revenue by region?", and expand "Show code" to see the pandas the agent ran.
+
+API endpoints (Phase 1): `POST /api/datasets` (CSV upload + profile), `POST /api/queries` (run the analysis graph), `GET /health`.
+
+### Phase 1 gate command
+
+```bash
+uv run alembic upgrade head && uv run pytest tests/phase1 -q
+```
+
+Tests hit the real Gemini API using the key in `.env` (they skip only if no key is present) and use an isolated temporary SQLite DB. SQLite is the production database for this deliberately local, single-user app.
+
+> Excel (`.xlsx`) and PDF-table ingestion are **not yet** supported — Phase 1 is CSV only (Phase 3).
+
+---
+
+## About the harness (below) — Zero Shot SDD Harness for Building Agents
 
 Give it a one-line idea. Walk away with a working, tested, phased agent.
 

@@ -33,3 +33,16 @@ class LLMClient:
 
     def call_model(self, prompt: str, *, system: str | None = None) -> str:
         return self._provider.call_model(prompt, system=system)
+
+    def call_model_with_usage(
+        self, prompt: str, *, system: str | None = None
+    ) -> tuple[str, dict]:
+        """Return (text, {prompt, completion, total}); usage is zeros if unsupported."""
+        gen = getattr(self._provider, "generate", None)
+        if gen is not None:
+            return gen(prompt, system=system)
+        return self._provider.call_model(prompt, system=system), {
+            "prompt": 0,
+            "completion": 0,
+            "total": 0,
+        }

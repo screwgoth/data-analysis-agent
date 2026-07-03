@@ -1,77 +1,96 @@
 'use client'
 
 import { useState } from 'react'
+import { askQuestion, type Dataset, type QueryResult } from '@/lib/api'
+import { UploadPanel } from '@/components/UploadPanel'
+import { ProfileTable } from '@/components/ProfileTable'
+import { QuestionBox } from '@/components/QuestionBox'
+import { AnswerView } from '@/components/AnswerView'
+import { Sidebar } from '@/components/Sidebar'
 
 export default function Home() {
-  const [input, setInput] = useState('')
-  const [result, setResult] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [dataset, setDataset] = useState<Dataset | null>(null)
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<QueryResult | null>(null)
+  const [askError, setAskError] = useState<string | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!input.trim()) return
-    setLoading(true)
-    setError(null)
+  function handleUploaded(d: Dataset) {
+    setDataset(d)
+    setResult(null)
+    setAskError(null)
+  }
+
+  async function handleAsk(question: string) {
+    if (!dataset) return
+    setRunning(true)
+    setAskError(null)
     setResult(null)
     try {
-      const res = await fetch('/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input_text: input }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.detail?.message ?? `Request failed (${res.status})`)
-      } else if (data.data?.error) {
-        setError(data.data.error)
-      } else {
-        setResult(data.data.output_text)
-      }
-    } catch {
-      setError('Network error — is the server running?')
+      const r = await askQuestion(question, [dataset.id])
+      setResult(r)
+    } catch (e) {
+      setAskError(e instanceof Error ? e.message : 'The request failed — please try again.')
     } finally {
-      setLoading(false)
+      setRunning(false)
     }
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-16">
-      <h1 className="mb-8 text-3xl font-bold tracking-tight">Agent</h1>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <textarea
-          className="w-full rounded-lg border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          rows={4}
-          placeholder="Enter text to transform…"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? 'Running…' : 'Run'}
-        </button>
-      </form>
-
-      {error && (
-        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error}
+    <div className="min-h-screen">
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
+          <div>
+            <h1 className="text-lg font-bold tracking-tight text-gray-900">
+              Local Data Analysis Agent
+            </h1>
+            <p className="text-xs text-gray-500">
+              Upload a CSV, ask a question, and see the exact pandas the agent ran — all on your machine.
+            </p>
+          </div>
         </div>
-      )}
+      </header>
 
-      {result && (
-        <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4 text-sm whitespace-pre-wrap shadow-sm">
-          {result}
+      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 lg:flex-row">
+        <Sidebar />
+
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+          <UploadPanel dataset={dataset} onUploaded={handleUploaded} />
+
+          {dataset ? (
+            <ProfileTable dataset={dataset} />
+          ) : (
+            <section className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
+              <p className="text-sm text-gray-500">
+                Your dataset&apos;s column profile — types, ranges, missing values, and PII flags — appears here after upload.
+              </p>
+            </section>
+          )}
+
+          <QuestionBox disabled={!dataset} running={running} onAsk={handleAsk} />
+
+          {askError && (
+            <div
+              role="alert"
+              className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+            >
+              {askError}
+            </div>
+          )}
+
+          {result ? (
+            <AnswerView result={result} />
+          ) : (
+            !running &&
+            dataset && (
+              <section className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
+                <p className="text-sm text-gray-500">
+                  Ask a question above to get a prose answer with the key numbers and the code behind it.
+                </p>
+              </section>
+            )
+          )}
         </div>
-      )}
-
-      {!result && !error && !loading && (
-        <p className="mt-10 text-center text-sm text-gray-400">Results will appear here.</p>
-      )}
-    </main>
+      </main>
+    </div>
   )
 }

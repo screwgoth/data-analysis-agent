@@ -13,6 +13,16 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./data/agent.db")
     log_level: str = Field(default="INFO")
 
+    # Analysis / agent bounds
+    data_dir: str = Field(default="./data")
+    max_steps: int = Field(default=6)
+    execution_timeout_s: int = Field(default=30)
+    max_upload_bytes: int = Field(default=100 * 1024 * 1024)  # ~100MB
+
+    # Optional LangSmith tracing (enabled only when a key is present)
+    langchain_api_key: str = Field(default="")
+    langchain_tracing_v2: str = Field(default="")
+
     # LLM provider — auto-detected from whichever key is set if left blank
     llm_provider: str = Field(default="")   # "anthropic" | "gemini"
     llm_model: str = Field(default="")      # uses provider default when blank
