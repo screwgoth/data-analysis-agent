@@ -24,6 +24,18 @@ export interface Dataset {
   row_count: number
   col_count: number
   profile: { columns: ProfileColumn[] }
+  source_format?: string | null
+  created_at?: string | null
+}
+
+// Lightweight row returned by GET /api/datasets (the library list). No profile.
+export interface DatasetSummary {
+  id: string
+  name: string
+  source_format: string | null
+  row_count: number
+  col_count: number
+  created_at: string | null
 }
 
 export interface AnalysisStep {
@@ -99,6 +111,27 @@ function unwrap<T>(body: unknown): T {
   return body as T
 }
 
+/** Unwrap a list that may arrive raw (`[...]`) or wrapped (`{ data: [...] }`). */
+function unwrapList<T>(body: unknown): T[] {
+  if (Array.isArray(body)) return body as T[]
+  if (body && typeof body === 'object' && 'data' in body) {
+    const inner = (body as { data: unknown }).data
+    if (Array.isArray(inner)) return inner as T[]
+    // Some list endpoints nest under { data: { datasets: [...] } }.
+    if (inner && typeof inner === 'object') {
+      for (const v of Object.values(inner as Record<string, unknown>)) {
+        if (Array.isArray(v)) return v as T[]
+      }
+    }
+  }
+  if (body && typeof body === 'object') {
+    for (const v of Object.values(body as Record<string, unknown>)) {
+      if (Array.isArray(v)) return v as T[]
+    }
+  }
+  return []
+}
+
 /** Pull a human error message out of either error shape. */
 function errorMessage(body: unknown, status: number): string {
   if (body && typeof body === 'object') {
@@ -169,6 +202,72 @@ export async function getSession(sessionId: string): Promise<Session> {
   }
   if (!res.ok) throw new Error(errorMessage(body, res.status))
   return unwrap<Session>(body)
+}
+
+/** List every dataset in the persistent library (GET /api/datasets). */
+export async function listDatasets(): Promise<DatasetSummary[]> {
+  const res = await fetch('/api/datasets')
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    // fall through
+  }
+  if (!res.ok) throw new Error(errorMessage(body, res.status))
+  return unwrapList<DatasetSummary>(body)
+}
+
+/** Fetch one dataset with its full profile (GET /api/datasets/{id}). */
+export async function getDataset(id: string): Promise<Dataset> {
+  const res = await fetch(`/api/datasets/${id}`)
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    // fall through
+  }
+  if (!res.ok) throw new Error(errorMessage(body, res.status))
+  return unwrap<Dataset>(body)
+}
+
+/** Rename a dataset (PATCH /api/datasets/{id}). Returns the updated summary. */
+export async function renameDataset(id: string, name: string): Promise<DatasetSummary> {
+  const res = await fetch(`/api/datasets/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    // fall through
+  }
+  if (!res.ok) throw new Error(errorMessage(body, res.status))
+  return unwrap<DatasetSummary>(body)
+}
+
+/** Delete a dataset and its local file (DELETE /api/datasets/{id}). */
+export async function deleteDataset(id: string): Promise<void> {
+  const res = await fetch(`/api/datasets/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    let body: unknown = null
+    try {
+      body = await res.json()
+    } catch {
+      // fall through
+    }
+    throw new Error(errorMessage(body, res.status))
+  }
+}
+
+/**
+ * Build the same-origin download URL for a query's exported result.
+ * Served under /api (NOT the /app basePath), so an absolute-from-root path
+ * resolves correctly whether the app is at /app/ or elsewhere.
+ */
+export function exportUrl(queryId: string, format: 'csv' | 'xlsx'): string {
+  return `/api/queries/${queryId}/export?format=${format}`
 }
 
 export async function askQuestion(

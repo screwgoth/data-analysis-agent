@@ -13,6 +13,8 @@ class AgentState(TypedDict, total=False):
     schema_context: str               # profile summary (from DatasetProfile)
     masked_sample: str                # PII-masked sample rows — ONLY data seen by LLM
     history: list                     # prior turns (Phase 2)
+    join_context: str                 # multi-dataset merge guidance (Phase 3)
+    proposed_join_key: str | None     # detected shared join column (Phase 3)
 
     # Pipeline data
     plan: str

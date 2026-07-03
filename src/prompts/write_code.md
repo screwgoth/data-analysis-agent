@@ -6,6 +6,7 @@ STRICT OUTPUT CONTRACT:
 - `RESULT` must be a JSON-serializable value: a number, string, dict, list, or a small pandas DataFrame/Series (it will be converted to records).
 - Do NOT read files yourself, do NOT call `input()`, do NOT access the network.
 - Use the real column names from the schema. Handle missing values sensibly.
+- MULTI-DATASET: if the question spans multiple datasets, the frames are `df1`, `df2`, ... (each labelled with its file in the schema). Combine them locally with `pd.merge(...)` on the shared/join key indicated in the multi-dataset guidance before aggregating. Never invent columns that are not in the schema.
 - If a previous step failed, read its error and correct the code.
 
 Example:

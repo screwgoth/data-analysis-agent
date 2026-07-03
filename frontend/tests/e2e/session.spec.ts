@@ -32,11 +32,9 @@ test('session: multi-turn transcript, suggestions, chart, token badge', async ({
 
   await expect(page.getByRole('heading', { name: /Local Data Analysis Agent/i })).toBeVisible()
 
-  // Phase-3 stubs remain clearly labelled coming-soon (not bugs).
-  await expect(page.getByText('Dataset library')).toBeVisible()
-  await expect(page.getByText('Multi-file join')).toBeVisible()
-  await expect(page.getByText('Export', { exact: true })).toBeVisible()
-  await expect(page.getByText(/Coming soon/i).first()).toBeVisible()
+  // Phase-3 features are now live — the library sidebar is real, no stubs.
+  await expect(page.getByRole('heading', { name: /Dataset library/i })).toBeVisible()
+  await expect(page.getByText(/Coming soon/i)).toHaveCount(0)
 
   // --- Upload the real CSV, wait for the profile ---
   await page.setInputFiles('input[type="file"]', FIXTURE)
@@ -92,7 +90,7 @@ test('session: multi-turn transcript, suggestions, chart, token badge', async ({
   await waitForLatestAnswer(page, 3)
   await expect(page.getByTestId('turn')).toHaveCount(3)
 
-  // Phase-3 stubs are STILL visibly labelled coming-soon at the end.
-  await expect(page.getByText('Dataset library')).toBeVisible()
-  await expect(page.getByText(/Coming soon/i).first()).toBeVisible()
+  // The library sidebar is still present at the end; no coming-soon stubs.
+  await expect(page.getByRole('heading', { name: /Dataset library/i })).toBeVisible()
+  await expect(page.getByText(/Coming soon/i)).toHaveCount(0)
 })

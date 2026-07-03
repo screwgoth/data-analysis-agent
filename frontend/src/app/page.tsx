@@ -1,36 +1,126 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   askQuestion,
   createSession,
+  deleteDataset,
+  getDataset,
+  listDatasets,
+  renameDataset,
   type Dataset,
+  type DatasetSummary,
   type QueryResult,
 } from '@/lib/api'
 import { UploadPanel } from '@/components/UploadPanel'
 import { ProfileTable } from '@/components/ProfileTable'
 import { QuestionBox } from '@/components/QuestionBox'
 import { Transcript, type Turn } from '@/components/Transcript'
-import { Sidebar } from '@/components/Sidebar'
+import { LibrarySidebar } from '@/components/LibrarySidebar'
 
 export default function Home() {
-  const [dataset, setDataset] = useState<Dataset | null>(null)
+  const [library, setLibrary] = useState<DatasetSummary[]>([])
+  const [libLoading, setLibLoading] = useState(true)
+  const [libError, setLibError] = useState<string | null>(null)
+
+  // The datasets checked for the next question (multi-select for cross-file).
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Full profile of the most-recently-selected dataset (drives ProfileTable).
+  const [activeProfile, setActiveProfile] = useState<Dataset | null>(null)
+
   const [running, setRunning] = useState(false)
   const [turns, setTurns] = useState<Turn[]>([])
   const [askError, setAskError] = useState<string | null>(null)
   // Session id is created lazily on the first question and reused for follow-ups.
+  // It is bound to the current dataset selection, so changing the selection
+  // resets it.
   const sessionIdRef = useRef<string | null>(null)
 
-  function handleUploaded(d: Dataset) {
-    setDataset(d)
+  const loadLibrary = useCallback(async () => {
+    setLibError(null)
+    try {
+      const items = await listDatasets()
+      setLibrary(items)
+      return items
+    } catch (e) {
+      setLibError(e instanceof Error ? e.message : 'Could not load your dataset library.')
+      return null
+    } finally {
+      setLibLoading(false)
+    }
+  }, [])
+
+  // Load the persistent library on mount — this is what makes it survive reloads.
+  useEffect(() => {
+    void loadLibrary()
+  }, [loadLibrary])
+
+  // Reset the conversation whenever the active dataset selection changes.
+  function resetConversation() {
     setTurns([])
     setAskError(null)
     sessionIdRef.current = null
   }
 
+  async function handleUploaded(d: Dataset) {
+    await loadLibrary()
+    setSelectedIds([d.id])
+    setActiveProfile(d)
+    resetConversation()
+  }
+
+  async function handleToggleSelect(id: string) {
+    const wasSelected = selectedIds.includes(id)
+    const next = wasSelected
+      ? selectedIds.filter(x => x !== id)
+      : [...selectedIds, id]
+    setSelectedIds(next)
+    resetConversation()
+
+    if (!wasSelected) {
+      // Newly selected → show its profile.
+      try {
+        const full = await getDataset(id)
+        setActiveProfile(full)
+      } catch {
+        // Non-fatal: the row is still selected for querying.
+      }
+    } else if (activeProfile?.id === id) {
+      // Deselected the profiled one → fall back to another selected dataset.
+      const fallback = next[next.length - 1]
+      if (fallback) {
+        try {
+          setActiveProfile(await getDataset(fallback))
+        } catch {
+          setActiveProfile(null)
+        }
+      } else {
+        setActiveProfile(null)
+      }
+    }
+  }
+
+  async function handleRename(id: string, name: string) {
+    await renameDataset(id, name)
+    await loadLibrary()
+    setActiveProfile(prev => (prev && prev.id === id ? { ...prev, name } : prev))
+  }
+
+  async function handleDelete(id: string) {
+    await deleteDataset(id)
+    await loadLibrary()
+    setSelectedIds(prev => prev.filter(x => x !== id))
+    setActiveProfile(prev => (prev && prev.id === id ? null : prev))
+    resetConversation()
+  }
+
+  const selectedNames = selectedIds
+    .map(id => library.find(d => d.id === id)?.name)
+    .filter((n): n is string => Boolean(n))
+
   const handleAsk = useCallback(
     async (question: string) => {
-      if (!dataset || running) return
+      if (selectedIds.length === 0 || running) return
       setAskError(null)
       setRunning(true)
       // Optimistically show the question turn immediately.
@@ -39,16 +129,15 @@ export default function Home() {
       try {
         // Create/reuse the session so follow-ups resolve against history.
         if (!sessionIdRef.current) {
-          sessionIdRef.current = await createSession([dataset.id])
+          sessionIdRef.current = await createSession(selectedIds)
         }
         const result: QueryResult = await askQuestion(
           question,
-          [dataset.id],
+          selectedIds,
           sessionIdRef.current,
         )
         setTurns(prev => {
           const next = [...prev]
-          // Attach the result to the last (pending) turn.
           for (let i = next.length - 1; i >= 0; i--) {
             if (next[i].result === null) {
               next[i] = { ...next[i], result }
@@ -60,7 +149,6 @@ export default function Home() {
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'The request failed — please try again.'
         setAskError(msg)
-        // Drop the pending turn so the transcript never shows a stuck bubble.
         setTurns(prev => {
           const next = [...prev]
           for (let i = next.length - 1; i >= 0; i--) {
@@ -75,8 +163,10 @@ export default function Home() {
         setRunning(false)
       }
     },
-    [dataset, running],
+    [selectedIds, running],
   )
+
+  const hasSelection = selectedIds.length > 0
 
   return (
     <div className="min-h-screen">
@@ -87,29 +177,56 @@ export default function Home() {
               Local Data Analysis Agent
             </h1>
             <p className="text-xs text-gray-500">
-              Upload a CSV, ask questions in a session, and see the exact pandas the agent ran — all on your machine.
+              Upload CSV, Excel, or PDF data, build a persistent library, ask questions across files, and export results — all on your machine.
             </p>
           </div>
         </div>
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 lg:flex-row">
-        <Sidebar />
+        <LibrarySidebar
+          datasets={library}
+          selectedIds={selectedIds}
+          loading={libLoading}
+          error={libError}
+          onToggleSelect={handleToggleSelect}
+          onRename={handleRename}
+          onDelete={handleDelete}
+          onRefresh={() => void loadLibrary()}
+        />
 
         <div className="flex min-w-0 flex-1 flex-col gap-6">
-          <UploadPanel dataset={dataset} onUploaded={handleUploaded} />
+          <UploadPanel dataset={activeProfile} onUploaded={d => void handleUploaded(d)} />
 
-          {dataset ? (
-            <ProfileTable dataset={dataset} />
+          {activeProfile ? (
+            <ProfileTable dataset={activeProfile} />
           ) : (
             <section className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
               <p className="text-sm text-gray-500">
-                Your dataset&apos;s column profile — types, ranges, missing values, and PII flags — appears here after upload.
+                Select or upload a dataset to see its column profile — types, ranges, missing values, and PII flags.
               </p>
             </section>
           )}
 
-          <QuestionBox disabled={!dataset} running={running} onAsk={handleAsk} />
+          {hasSelection && (
+            <div
+              data-testid="active-datasets"
+              className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-2.5 text-xs text-blue-800"
+            >
+              {selectedNames.length > 1 ? (
+                <>
+                  Asking across <span className="font-semibold">{selectedNames.length}</span> datasets:{' '}
+                  {selectedNames.join(', ')}. The agent proposes a join key or asks a clarifying question if needed.
+                </>
+              ) : (
+                <>
+                  Active dataset: <span className="font-semibold">{selectedNames[0]}</span>
+                </>
+              )}
+            </div>
+          )}
+
+          <QuestionBox disabled={!hasSelection} running={running} onAsk={handleAsk} />
 
           {askError && (
             <div
@@ -124,10 +241,10 @@ export default function Home() {
             <Transcript turns={turns} running={running} onSuggestion={handleAsk} />
           ) : (
             !running &&
-            dataset && (
+            hasSelection && (
               <section className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
                 <p className="text-sm text-gray-500">
-                  Ask a question above to start a conversation. Follow-ups like &ldquo;and just for 2024?&rdquo; resolve against the session, and each answer suggests what to ask next.
+                  Ask a question above to start a conversation. Follow-ups like &ldquo;and just for 2024?&rdquo; resolve against the session, and each answer can be exported as CSV or Excel.
                 </p>
               </section>
             )

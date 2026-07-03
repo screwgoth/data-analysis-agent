@@ -65,9 +65,12 @@ def _to_scalar(value: object):
     return value.item() if hasattr(value, "item") else value
 
 
-def profile_csv(path: str | Path) -> dict:
-    """Read a stored CSV and return row/col counts, profile, and masked sample."""
-    df = pd.read_csv(path)
+def profile_loaded(df: pd.DataFrame) -> dict:
+    """Profile an already-loaded DataFrame (from CSV, Excel, or PDF).
+
+    Returns row/col counts, per-column profile, and the PII-masked sample —
+    the shape the upload endpoint persists onto the ``Dataset`` row.
+    """
     profile = profile_dataframe(df)
     return {
         "row_count": int(len(df)),
@@ -75,6 +78,24 @@ def profile_csv(path: str | Path) -> dict:
         "columns": profile["columns"],
         "masked_sample": profile["masked_sample"],
     }
+
+
+def profile_csv(path: str | Path) -> dict:
+    """Read a stored CSV and return row/col counts, profile, and masked sample."""
+    return profile_loaded(pd.read_csv(path))
+
+
+def store_canonical_csv(df: pd.DataFrame, dataset_id: str, data_dir: str | Path) -> Path:
+    """Persist a normalized ``data.csv`` under data/datasets/<id>/.
+
+    Excel/PDF uploads are normalized to a canonical CSV so the subprocess
+    executor (which only reads CSV) keeps reading local data unchanged.
+    """
+    dest_dir = Path(data_dir) / "datasets" / dataset_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "data.csv"
+    df.to_csv(dest, index=False)
+    return dest
 
 
 def store_csv(file_bytes: bytes, dataset_id: str, filename: str, data_dir: str | Path) -> Path:

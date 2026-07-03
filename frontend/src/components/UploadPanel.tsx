@@ -18,8 +18,8 @@ export function UploadPanel({
 
   async function handleFile(file: File | undefined) {
     if (!file) return
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      setError('Please choose a .csv file. Excel and PDF support arrive in Phase 3.')
+    if (!/\.(csv|xlsx|xls|pdf)$/i.test(file.name)) {
+      setError('Please choose a .csv, .xlsx, or .pdf file.')
       return
     }
     setError(null)
@@ -62,14 +62,14 @@ export function UploadPanel({
         }`}
       >
         <p className="mb-3 text-sm text-gray-500">
-          Drag a CSV here, or choose a file to profile it.
+          Drag a CSV, Excel, or PDF file here, or choose one to profile it.
         </p>
         <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-within:ring-2 focus-within:ring-blue-500">
-          {dataset ? 'Choose a different CSV' : 'Choose CSV file'}
+          {dataset ? 'Choose a different file' : 'Choose a file'}
           <input
             ref={inputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,.pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
             className="sr-only"
             disabled={uploading}
             onChange={e => void handleFile(e.target.files?.[0])}

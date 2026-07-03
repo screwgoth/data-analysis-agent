@@ -83,6 +83,27 @@ Still-stubbed until Phase 3: dataset-library sidebar, Excel/PDF upload, multi-fi
 
 ---
 
+## Phase 3 — Dataset Library, Multi-file & Export
+
+Phase 3 makes the library persistent and multi-format, and lets you take data out.
+
+- **Excel + PDF ingestion** — `POST /api/datasets` now accepts `.csv`, `.xlsx`, and `.pdf` in addition to CSV, dispatched by file extension. Excel is read with pandas/openpyxl (the **first sheet** of a multi-sheet workbook). PDF tables are extracted best-effort with `pdfplumber` — the **largest table** found is used, its first row as the header. Every upload is normalized to a canonical local `data.csv` under `data/datasets/<id>/` so the subprocess executor keeps reading local CSV only. An unparseable file — including a PDF with no extractable table — returns **400** (never a 500 crash); files over ~100MB return **413**.
+- **Persistent library CRUD** — `GET /api/datasets` (list all: id, name, source_format, row/col counts, created_at), `GET /api/datasets/{id}` (dataset + its profile), `PATCH /api/datasets/{id}` (rename), `DELETE /api/datasets/{id}` (removes the DB row, its profile, **and** the local file(s) from disk, Windows-safe).
+- **Export** — `GET /api/queries/{id}/export?format=csv|xlsx` streams the query's final result as a downloadable file with the correct `Content-Disposition` and media type. Built locally from the persisted `AnalysisStep.result_json`. Unknown query → **404**; build failure → **500**.
+- **Multi-file join / cross-file analysis** — a session and `POST /api/queries` can span multiple `dataset_ids`. When 2+ datasets are selected, the runner loads each as its own DataFrame in the sandbox (`df1`, `df2`, … — labelled with its filename in the prompt) and `src/analysis/join.py::propose_join_key` deterministically proposes a shared join column (a column name present in every dataset with a compatible dtype family, id/key-like columns preferred). The proposed key is injected into the plan/write-code prompts so a cross-file question ("total amount by region, joining orders to customers on customer_id") produces a real local `pd.merge(...)` + aggregation. If no confident shared key is found, the agent states its assumption or asks one clarifying question. Privacy holds across every dataset: only schema + PII-masked samples reach Gemini — raw rows for all files stay local. Single-dataset behavior is unchanged.
+
+New Python deps: `openpyxl` (Excel) and `pdfplumber` (PDF tables).
+
+> PDF table extraction is inherently best-effort — a PDF is a layout format, not a data format. Ruled or well-aligned tables extract reliably; free-form layouts may not, and degrade gracefully to a 400 rather than crashing.
+
+### Phase 3 gate command
+
+```bash
+uv run alembic upgrade head && uv run pytest tests/phase3 -q
+```
+
+---
+
 ## About the harness (below) — Zero Shot SDD Harness for Building Agents
 
 Give it a one-line idea. Walk away with a working, tested, phased agent.

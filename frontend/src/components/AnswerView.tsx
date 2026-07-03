@@ -9,6 +9,7 @@ import { Chart } from './Chart'
 import { SummaryTable } from './SummaryTable'
 import { Suggestions } from './Suggestions'
 import { TokenBadge } from './TokenBadge'
+import { ExportMenu } from './ExportMenu'
 
 function StepCard({ step }: { step: AnalysisStep }) {
   const hasResult =
@@ -184,6 +185,10 @@ export function AnswerView({
       {onSuggestion && (
         <Suggestions suggestions={result.suggestions} onPick={onSuggestion} disabled={busy} />
       )}
+
+      {/* Export is available once the query produced a real result (has code
+          steps), and never for a pure clarifying-question turn. */}
+      {!clarifying && result.steps.length > 0 && <ExportMenu queryId={result.id} />}
 
       {result.token_usage && (
         <div className="flex items-center gap-2 border-t border-gray-100 pt-3">

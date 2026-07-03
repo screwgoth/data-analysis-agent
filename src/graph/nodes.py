@@ -133,10 +133,12 @@ def node_plan(state: AgentState) -> AgentState:
     start = time.perf_counter()
     try:
         history = _history_block(state)
+        join = state.get("join_context") or ""
         user = (
             (f"{history}\n\n" if history else "")
             + f"CURRENT QUESTION:\n{state['question']}\n\n"
-            f"SCHEMA:\n{state.get('schema_context', '')}\n\n"
+            + (f"{join}\n\n" if join else "")
+            + f"SCHEMA:\n{state.get('schema_context', '')}\n\n"
             f"PII-MASKED SAMPLE (do not trust exact masked values):\n"
             f"{state.get('masked_sample', '')}"
         )
@@ -171,10 +173,12 @@ def node_write_code(state: AgentState) -> AgentState:
                 f"result (masked/aggregated): {_masked_result(step, 1500)}\n"
                 f"error: {step.get('error')}\n"
             )
+        join = state.get("join_context") or ""
         user = (
             f"QUESTION:\n{state['question']}\n\n"
             f"PLAN:\n{state.get('plan', '')}\n\n"
-            f"SCHEMA:\n{state.get('schema_context', '')}\n"
+            + (f"{join}\n\n" if join else "")
+            + f"SCHEMA:\n{state.get('schema_context', '')}\n"
             f"{'PRIOR STEPS:' + prior if prior else ''}"
         )
         text, usage = _call_llm(user, system=_prompt("write_code"))

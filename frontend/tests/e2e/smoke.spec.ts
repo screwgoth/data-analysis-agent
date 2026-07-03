@@ -24,9 +24,9 @@ test('upload → profile → ask → answer with code trace', async ({ page }) =
   // Page loaded and styled (header present).
   await expect(page.getByRole('heading', { name: /Local Data Analysis Agent/i })).toBeVisible()
 
-  // Labelled non-functional stubs are present and marked coming-soon.
-  await expect(page.getByText('Dataset library')).toBeVisible()
-  await expect(page.getByText(/Coming soon/i).first()).toBeVisible()
+  // The persistent library sidebar is present and real (no coming-soon stubs).
+  await expect(page.getByRole('heading', { name: /Dataset library/i })).toBeVisible()
+  await expect(page.getByText(/Coming soon/i)).toHaveCount(0)
 
   // --- Upload the real CSV ---
   await page.setInputFiles('input[type="file"]', FIXTURE)

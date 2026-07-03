@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from analysis.join import propose_join_key
 from config.settings import get_settings
 from db.models import AnalysisStep, Dataset, DatasetProfile, Query
 from db.session import create_db_session, init_db
@@ -62,6 +63,8 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
         schema_parts: list[str] = []
         masked_parts: list[str] = []
         dataset_paths: list[str] = []
+        dataset_filenames: list[str] = []
+        profile_columns: list[list[dict]] = []
         for ds in datasets:
             profile = (
                 session.query(DatasetProfile)
@@ -71,6 +74,43 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
             schema_parts.append(_schema_context(profile, ds))
             masked_parts.append(json.dumps(ds.masked_sample or [])[:4000])
             dataset_paths.append(ds.local_path)
+            dataset_filenames.append(ds.filename)
+            profile_columns.append((profile.columns if profile else None) or [])
+        n_datasets = len(datasets)
+
+    multi = n_datasets >= 2
+    proposed_join_key: str | None = None
+    join_context = ""
+    if multi:
+        # Label each dataset with its subprocess DataFrame variable so the plan
+        # and generated code know exactly which frame is which (df1, df2, ...).
+        labelled_schema = []
+        labelled_masked = []
+        for i, fname in enumerate(dataset_filenames, start=1):
+            labelled_schema.append(f"[DataFrame df{i} — file '{fname}']\n{schema_parts[i - 1]}")
+            labelled_masked.append(f"[df{i} — '{fname}' PII-masked sample]\n{masked_parts[i - 1]}")
+        schema_context = "\n\n".join(labelled_schema)
+        masked_sample = "\n\n".join(labelled_masked)
+        proposed_join_key = propose_join_key(profile_columns)
+        var_list = ", ".join(f"df{i}" for i in range(1, n_datasets + 1))
+        if proposed_join_key:
+            join_context = (
+                f"MULTI-DATASET QUERY: {n_datasets} datasets are loaded as {var_list}.\n"
+                f"PROPOSED JOIN KEY: '{proposed_join_key}' — this column appears in every "
+                f"dataset with a compatible type. When the question spans datasets, MERGE them "
+                f"on '{proposed_join_key}' (e.g. pd.merge(df1, df2, on='{proposed_join_key}')) "
+                f"before aggregating. Compute over the FULL merged data."
+            )
+        else:
+            join_context = (
+                f"MULTI-DATASET QUERY: {n_datasets} datasets are loaded as {var_list}.\n"
+                f"No single obvious shared join key was detected automatically. If the question "
+                f"requires combining datasets, pick the best-matching columns to merge on and "
+                f"STATE that assumption; if truly ambiguous, ask one clarifying question."
+            )
+    else:
+        schema_context = "\n\n".join(schema_parts)
+        masked_sample = "\n\n".join(masked_parts)
 
     initial: AgentState = {
         "run_id": run_id,
@@ -78,8 +118,10 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
         "question": question,
         "dataset_ids": list(dataset_ids),
         "dataset_paths": dataset_paths,
-        "schema_context": "\n\n".join(schema_parts),
-        "masked_sample": "\n\n".join(masked_parts),
+        "schema_context": schema_context,
+        "masked_sample": masked_sample,
+        "join_context": join_context,
+        "proposed_join_key": proposed_join_key,
         "history": history,
         "steps": [],
         "current_step": 0,
@@ -88,7 +130,12 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
         "error": None,
     }
 
-    _log.info("query_start", run_id=run_id, datasets=len(dataset_paths))
+    _log.info(
+        "query_start",
+        run_id=run_id,
+        datasets=len(dataset_paths),
+        join_key=proposed_join_key,
+    )
     final = agentic_ai.invoke(initial, {"recursion_limit": 50})
     _log.info(
         "query_done",
