@@ -13,13 +13,19 @@ class GeminiProvider:
         text, _ = self.generate(prompt, system=system)
         return text
 
-    def generate(self, prompt: str, *, system: str | None = None) -> tuple[str, dict]:
-        """Return (text, token_usage) where usage = {prompt, completion, total}."""
+    def generate(
+        self, prompt: str, *, system: str | None = None, model: str | None = None
+    ) -> tuple[str, dict]:
+        """Return (text, token_usage) where usage = {prompt, completion, total}.
+
+        ``model`` overrides the configured model for this call (e.g. the light
+        ``gemini-2.5-flash`` used by the Phase-2 suggest node).
+        """
         config = types.GenerateContentConfig(
             system_instruction=system,
         ) if system else None
         response = self._client.models.generate_content(
-            model=self._model,
+            model=model or self._model,
             contents=prompt,
             config=config,
         )

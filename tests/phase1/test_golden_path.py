@@ -88,7 +88,6 @@ def test_golden_path_upload_profile_ask(api_client, sales_csv, _isolated_db):
 
     # --- Correctness: compute the truth over the FULL dataset ourselves ---
     truth = df.groupby("region")["revenue"].sum().to_dict()
-    grand_total = int(df["revenue"].sum())  # 8300
 
     # The per-region totals must appear in a step result OR the answer prose.
     steps_blob = _flatten([s.get("result_json") for s in body["steps"]])
@@ -97,7 +96,10 @@ def test_golden_path_upload_profile_ask(api_client, sales_csv, _isolated_db):
         assert (
             str(int(total)) in steps_blob or str(int(total)) in answer
         ), f"expected {region}={total} in results/answer"
-    assert str(grand_total) in answer or str(grand_total) in steps_blob or True
+    # Every per-region total must be present in a real step result_json (genuine gate).
+    assert all(
+        str(int(total)) in steps_blob for total in truth.values()
+    ), "each per-region total must appear in a persisted step result_json"
 
     # Answer prose references the numbers.
     assert any(str(int(t)) in answer for t in truth.values())

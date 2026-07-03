@@ -15,7 +15,7 @@ def err_or(target: str):
 # Prebuilt routers for the linear error branches.
 _after_write_code = err_or("execute_local")
 _after_execute = err_or("reflect")
-_after_answer = err_or("finalize")
+_after_answer = err_or("suggest")
 
 
 def after_write_code(state: AgentState) -> str:

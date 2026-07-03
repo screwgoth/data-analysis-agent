@@ -4,7 +4,11 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AnalysisStep, QueryResult } from '@/lib/api'
-import { ComingSoonBadge } from './ComingSoon'
+import { recordsFromResult } from '@/lib/records'
+import { Chart } from './Chart'
+import { SummaryTable } from './SummaryTable'
+import { Suggestions } from './Suggestions'
+import { TokenBadge } from './TokenBadge'
 
 function StepCard({ step }: { step: AnalysisStep }) {
   const hasResult =
@@ -54,7 +58,24 @@ function StepCard({ step }: { step: AnalysisStep }) {
   )
 }
 
-export function AnswerView({ result }: { result: QueryResult }) {
+/**
+ * Renders a single completed turn's answer: prose + assumptions + collapsible
+ * code + interactive chart + sortable summary table + follow-up suggestions +
+ * token badge. Also handles the clarifying-question and failed states.
+ *
+ * `onSuggestion` submits a suggestion (or the reply to a clarifying question)
+ * as the next turn in the same session. `busy` disables interaction while a
+ * later turn is already running.
+ */
+export function AnswerView({
+  result,
+  onSuggestion,
+  busy,
+}: {
+  result: QueryResult
+  onSuggestion?: (question: string) => void
+  busy?: boolean
+}) {
   const [showCode, setShowCode] = useState(false)
 
   const failed = result.status === 'failed' || result.status === 'error'
@@ -65,7 +86,7 @@ export function AnswerView({ result }: { result: QueryResult }) {
         role="alert"
         className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700 shadow-sm"
       >
-        <h2 className="mb-1 text-base font-semibold text-red-800">Analysis failed</h2>
+        <h3 className="mb-1 text-base font-semibold text-red-800">Analysis failed</h3>
         <p>
           {result.error_message?.trim() ||
             'The agent could not complete this analysis. Try rephrasing the question.'}
@@ -86,12 +107,34 @@ export function AnswerView({ result }: { result: QueryResult }) {
     )
   }
 
+  // Clarifying-question state: the agent is asking the user, NOT an error.
+  // Render distinctly and let the user answer as the next turn.
+  const clarifying = result.clarifying_question?.trim()
+
+  const lastStepResult = result.steps.length > 0 ? result.steps[result.steps.length - 1].result_json : undefined
+  const tableRows = recordsFromResult(result.chart_spec?.table, lastStepResult)
+
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <h2 className="mb-3 text-base font-semibold text-gray-900">4 · Answer</h2>
+    <div className="space-y-3">
+      {clarifying && (
+        <div
+          data-testid="clarifying-question"
+          className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
+        >
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-500">
+            The agent needs a bit more detail
+          </p>
+          <p className="text-sm text-indigo-900">{clarifying}</p>
+          {onSuggestion && (
+            <p className="mt-2 text-xs text-indigo-600">
+              Type your answer in the question box below to continue.
+            </p>
+          )}
+        </div>
+      )}
 
       {result.assumptions.length > 0 && (
-        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <p className="mb-1 font-medium">Assumptions</p>
           <ul className="list-inside list-disc space-y-0.5">
             {result.assumptions.map((a, i) => (
@@ -101,17 +144,22 @@ export function AnswerView({ result }: { result: QueryResult }) {
         </div>
       )}
 
-      <div
-        data-testid="answer-prose"
-        className="prose prose-sm max-w-none text-gray-800 [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_table]:w-full [&_th]:text-left"
-      >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {result.answer?.trim() || '_No answer text was returned._'}
-        </ReactMarkdown>
-      </div>
+      {(result.answer?.trim() || !clarifying) && (
+        <div
+          data-testid="answer-prose"
+          className="prose prose-sm max-w-none text-gray-800 [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_table]:w-full [&_th]:text-left"
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {result.answer?.trim() || '_No answer text was returned._'}
+          </ReactMarkdown>
+        </div>
+      )}
+
+      <Chart spec={result.chart_spec} />
+      <SummaryTable rows={tableRows} />
 
       {result.steps.length > 0 && (
-        <div className="mt-4">
+        <div>
           <button
             type="button"
             onClick={() => setShowCode(v => !v)}
@@ -133,18 +181,15 @@ export function AnswerView({ result }: { result: QueryResult }) {
         </div>
       )}
 
-      {/* Phase 2 stubs, inline under the answer so their place is obvious. */}
-      <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-4">
-        <span className="inline-flex items-center gap-2 text-xs text-gray-400">
-          Chart <ComingSoonBadge phase="Phase 2" />
-        </span>
-        <span className="inline-flex items-center gap-2 text-xs text-gray-400">
-          Follow-up suggestions <ComingSoonBadge phase="Phase 2" />
-        </span>
-        <span className="inline-flex items-center gap-2 text-xs text-gray-400">
-          Token usage <ComingSoonBadge phase="Phase 2" />
-        </span>
-      </div>
-    </section>
+      {onSuggestion && (
+        <Suggestions suggestions={result.suggestions} onPick={onSuggestion} disabled={busy} />
+      )}
+
+      {result.token_usage && (
+        <div className="flex items-center gap-2 border-t border-gray-100 pt-3">
+          <TokenBadge usage={result.token_usage} />
+        </div>
+      )}
+    </div>
   )
 }

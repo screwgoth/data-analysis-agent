@@ -44,6 +44,19 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
         session.flush()
         run_id = query.id
 
+        # Load prior conversation turns for this session (Phase 2 memory).
+        history: list[dict] = []
+        if session_id:
+            prior = (
+                session.query(Query)
+                .filter(Query.session_id == session_id, Query.id != run_id)
+                .order_by(Query.created_at)
+                .all()
+            )
+            for q in prior:
+                if q.answer:
+                    history.append({"question": q.question, "answer": q.answer})
+
         datasets = [session.get(Dataset, did) for did in dataset_ids]
         datasets = [d for d in datasets if d is not None]
         schema_parts: list[str] = []
@@ -67,7 +80,7 @@ def run_query(question: str, dataset_ids: list[str], session_id: str | None = No
         "dataset_paths": dataset_paths,
         "schema_context": "\n\n".join(schema_parts),
         "masked_sample": "\n\n".join(masked_parts),
-        "history": [],
+        "history": history,
         "steps": [],
         "current_step": 0,
         "max_steps": settings.max_steps,
@@ -114,6 +127,7 @@ def load_query_response(run_id: str) -> dict:
         )
         return {
             "id": query.id,
+            "session_id": query.session_id,
             "status": query.status,
             "answer": query.answer,
             "assumptions": query.assumptions or [],

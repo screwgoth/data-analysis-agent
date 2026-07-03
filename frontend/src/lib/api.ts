@@ -42,6 +42,31 @@ export interface TokenUsage {
   warn: boolean
 }
 
+// Chart spec produced by the agent's `build_chart` node from LOCALLY-computed
+// result data (raw rows never leave the machine). The exact shape is not pinned
+// by spec/api.md beyond "JSON (chart type, data, axes)", so the Chart component
+// is deliberately tolerant: `type` picks bar vs line, `x`/`y` name the record
+// keys to plot, and `data` is an array of records. Missing/null spec → no chart.
+export interface ChartSeries {
+  name: string // series label / dataKey
+  data: (number | null)[] // values aligned to `x` by index
+}
+
+export interface ChartTable {
+  columns: string[]
+  rows: unknown[][] // positional arrays aligned to `columns`
+}
+
+export interface ChartSpec {
+  type?: string // "bar" | "line" (default: bar)
+  title?: string
+  x: string[] // category labels
+  x_label?: string
+  y_label?: string
+  series: ChartSeries[] // each series' data aligned to `x` by index
+  table?: ChartTable // summary table (positional rows)
+}
+
 export interface QueryResult {
   id: string
   status: string // "completed" | "failed" | ...
@@ -49,10 +74,20 @@ export interface QueryResult {
   assumptions: string[]
   clarifying_question: string | null
   steps: AnalysisStep[]
-  chart_spec: unknown | null
+  chart_spec: ChartSpec | null
   suggestions: string[]
   token_usage: TokenUsage | null
   error_message?: string | null
+  // Echoed by the backend so the UI can render turns in order; optional.
+  question?: string | null
+}
+
+export interface Session {
+  id: string
+  dataset_ids?: string[]
+  // GET /api/sessions/{id} returns ordered prior Query rows as history.
+  queries?: QueryResult[]
+  history?: QueryResult[]
 }
 
 /** Unwrap the optional `{ data: ... }` envelope. */
@@ -95,9 +130,51 @@ export async function uploadDataset(file: File): Promise<Dataset> {
   return unwrap<Dataset>(body)
 }
 
+function normalizeResult(r: QueryResult): QueryResult {
+  // The contract promises arrays; guard against null so the UI never crashes
+  // if the backend omits an optional list.
+  return {
+    ...r,
+    assumptions: r.assumptions ?? [],
+    steps: r.steps ?? [],
+    suggestions: r.suggestions ?? [],
+  }
+}
+
+/** Create a session over the given dataset(s). Returns its session_id. */
+export async function createSession(datasetIds: string[]): Promise<string> {
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dataset_ids: datasetIds }),
+  })
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    // fall through
+  }
+  if (!res.ok) throw new Error(errorMessage(body, res.status))
+  return unwrap<Session>(body).id
+}
+
+/** Fetch a session's ordered history (used to restore a transcript). */
+export async function getSession(sessionId: string): Promise<Session> {
+  const res = await fetch(`/api/sessions/${sessionId}`)
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    // fall through
+  }
+  if (!res.ok) throw new Error(errorMessage(body, res.status))
+  return unwrap<Session>(body)
+}
+
 export async function askQuestion(
   question: string,
   datasetIds: string[],
+  sessionId: string | null = null,
 ): Promise<QueryResult> {
   const res = await fetch('/api/queries', {
     method: 'POST',
@@ -105,7 +182,7 @@ export async function askQuestion(
     body: JSON.stringify({
       question,
       dataset_ids: datasetIds,
-      session_id: null,
+      session_id: sessionId,
     }),
   })
   let body: unknown = null
@@ -115,13 +192,5 @@ export async function askQuestion(
     // fall through
   }
   if (!res.ok) throw new Error(errorMessage(body, res.status))
-  const r = unwrap<QueryResult>(body)
-  // Normalize: the contract promises arrays, but guard against null so the UI
-  // never crashes if the backend omits an optional list.
-  return {
-    ...r,
-    assumptions: r.assumptions ?? [],
-    steps: r.steps ?? [],
-    suggestions: r.suggestions ?? [],
-  }
+  return normalizeResult(unwrap<QueryResult>(body))
 }

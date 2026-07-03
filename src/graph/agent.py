@@ -7,6 +7,7 @@ from graph.nodes import (
     node_execute_local,
     node_reflect,
     node_answer,
+    node_suggest,
     node_finalize,
     node_handle_error,
 )
@@ -27,6 +28,7 @@ def _build_graph():
     graph.add_node("execute_local", node_execute_local)
     graph.add_node("reflect", node_reflect)
     graph.add_node("answer", node_answer)
+    graph.add_node("suggest", node_suggest)
     graph.add_node("finalize", node_finalize)
     graph.add_node("handle_error", node_handle_error)
 
@@ -59,8 +61,9 @@ def _build_graph():
     graph.add_conditional_edges(
         "answer",
         after_answer,
-        {"handle_error": "handle_error", "finalize": "finalize"},
+        {"handle_error": "handle_error", "suggest": "suggest"},
     )
+    graph.add_edge("suggest", "finalize")
     graph.add_edge("finalize", END)
     graph.add_edge("handle_error", END)
 

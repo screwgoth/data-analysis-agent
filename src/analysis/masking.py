@@ -71,6 +71,62 @@ def mask_value(value: object) -> str:
     return text[0] + "*" * (len(text) - 2) + text[-1]
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _mask_cell(value: object) -> object:
+    """Numbers (aggregates) pass through; strings are masked; bools/None kept."""
+    if value is None or _is_number(value) or isinstance(value, bool):
+        return value
+    return mask_value(value)
+
+
+def mask_result_feedback(result_json: object, max_records: int = 20) -> object:
+    """Mask/aggregate an executed step's ``result_json`` before it re-enters an
+    LLM prompt (the write_code / reflect / answer loop).
+
+    Numeric aggregates (e.g. a groupby-sum mapping) are preserved so the model can
+    reason about the answer, but raw string cell values from result rows are masked
+    so no un-aggregated PII leaks back into a prompt. The FULL unmasked result is
+    still persisted on the AnalysisStep audit row — only the prompt copy is masked.
+    """
+    # List of record dicts — the classic "raw rows" shape: summarize + mask.
+    if isinstance(result_json, list):
+        if not result_json:
+            return {"summary": "empty result (0 rows)"}
+        if all(isinstance(r, dict) for r in result_json):
+            n = len(result_json)
+            columns = list(result_json[0].keys())
+            sample = [
+                {str(k): _mask_cell(v) for k, v in rec.items()}
+                for rec in result_json[:min(max_records, 5)]
+            ]
+            return {
+                "summary": f"{n} rows",
+                "columns": columns,
+                "masked_sample": sample,
+            }
+        # List of scalars.
+        return {
+            "summary": f"{len(result_json)} values",
+            "masked_sample": [_mask_cell(v) for v in result_json[:max_records]],
+        }
+
+    # Mapping — typically an aggregate {label: number}; keep numbers, mask strings.
+    if isinstance(result_json, dict):
+        masked: dict = {}
+        for i, (k, v) in enumerate(result_json.items()):
+            if i >= max_records:
+                masked["…"] = f"({len(result_json) - max_records} more)"
+                break
+            masked[str(k)] = _mask_cell(v)
+        return masked
+
+    # Scalar (number/string/None).
+    return _mask_cell(result_json)
+
+
 def build_masked_sample(
     df: pd.DataFrame, pii_columns: list[str], n: int = 5
 ) -> list[dict]:

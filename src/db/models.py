@@ -71,6 +71,26 @@ class DatasetProfile(Base):
     )
 
 
+class AnalysisSession(Base):
+    """A long-lived conversation over one or more datasets (Phase 2).
+
+    Named ``AnalysisSession`` to avoid a clash with ``sqlalchemy.orm.Session``;
+    the table is ``sessions`` and it is exposed via ``/api/sessions``.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
+    # Active dataset ids for the session.
+    dataset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now
+    )
+
+
 class Query(Base):
     """One natural-language question and its answer (id is also the graph run_id)."""
 

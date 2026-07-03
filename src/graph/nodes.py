@@ -12,7 +12,9 @@ import re
 import time
 from pathlib import Path
 
+from analysis.charting import build_chart_spec
 from analysis.executor import execute_code
+from analysis.masking import mask_result_feedback
 from config.settings import get_settings
 from db.models import AnalysisStep
 from db.session import create_db_session
@@ -30,12 +32,12 @@ def _prompt(name: str) -> str:
     return (_PROMPTS / f"{name}.md").read_text(encoding="utf-8").strip()
 
 
-def _call_llm(prompt: str, *, system: str) -> tuple[str, dict]:
+def _call_llm(prompt: str, *, system: str, model: str | None = None) -> tuple[str, dict]:
     """Call the LLM with one retry+backoff. Raises on continued failure."""
     last_exc: Exception | None = None
     for attempt in range(2):
         try:
-            return LLMClient().call_model_with_usage(prompt, system=system)
+            return LLMClient().call_model_with_usage(prompt, system=system, model=model)
         except Exception as exc:  # noqa: BLE001 — surfaced to caller
             last_exc = exc
             if attempt == 0:
@@ -47,8 +49,66 @@ def _accumulate(state: AgentState, usage: dict) -> dict:
     total = dict(state.get("token_usage") or {"prompt": 0, "completion": 0, "total": 0})
     for k in ("prompt", "completion", "total"):
         total[k] = int(total.get(k, 0)) + int(usage.get(k, 0) or 0)
-    total.setdefault("warn", False)  # warn logic is Phase 2
+    # High-spend warning — total tokens across all nodes over a configured bound.
+    total["warn"] = int(total.get("total", 0)) >= get_settings().token_warn_threshold
     return total
+
+
+def _history_block(state: AgentState) -> str:
+    """Render the most-recent N conversation turns for prompt context (Phase 2)."""
+    history = state.get("history") or []
+    if not history:
+        return ""
+    n = get_settings().history_max_turns
+    recent = history[-n:]
+    lines = []
+    for turn in recent:
+        q = str(turn.get("question", "")).strip()
+        a = str(turn.get("answer", "")).strip()
+        if not q:
+            continue
+        lines.append(f"User: {q}\nAssistant: {a}")
+    if not lines:
+        return ""
+    return "CONVERSATION SO FAR (resolve follow-ups against this):\n" + "\n\n".join(lines)
+
+
+def _masked_result(step: dict, limit: int = 1500) -> str:
+    """Masked/aggregated result feedback for prompts (raw cells never leak back)."""
+    return json.dumps(mask_result_feedback(step.get("result_json")))[:limit]
+
+
+def _parse_plan(text: str) -> dict:
+    """Plan node returns JSON {clarify, clarifying_question, plan}; degrade to text."""
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict) and ("plan" in data or "clarify" in data):
+                return {
+                    "clarify": bool(data.get("clarify", False)),
+                    "clarifying_question": data.get("clarifying_question"),
+                    "plan": data.get("plan") or "",
+                }
+        except json.JSONDecodeError:
+            pass
+    # Fallback: the whole response is a free-text plan.
+    return {"clarify": False, "clarifying_question": None, "plan": text.strip()}
+
+
+def _parse_suggestions(text: str) -> list:
+    """Suggest node returns a JSON array of question strings; degrade to lines."""
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, list):
+                out = [str(s).strip() for s in data if str(s).strip()]
+                return out[:3]
+        except json.JSONDecodeError:
+            pass
+    lines = [ln.strip(" -*0123456789.").strip() for ln in text.splitlines()]
+    return [ln for ln in lines if ln][:3]
 
 
 def _extract_code(text: str) -> str:
@@ -72,16 +132,30 @@ def _span(node: str, state: AgentState, **extra) -> None:
 def node_plan(state: AgentState) -> AgentState:
     start = time.perf_counter()
     try:
+        history = _history_block(state)
         user = (
-            f"QUESTION:\n{state['question']}\n\n"
+            (f"{history}\n\n" if history else "")
+            + f"CURRENT QUESTION:\n{state['question']}\n\n"
             f"SCHEMA:\n{state.get('schema_context', '')}\n\n"
             f"PII-MASKED SAMPLE (do not trust exact masked values):\n"
             f"{state.get('masked_sample', '')}"
         )
         text, usage = _call_llm(user, system=_prompt("plan"))
-        state = {**state, "plan": text, "token_usage": _accumulate(state, usage)}
-        _span("plan", state, duration_ms=int((time.perf_counter() - start) * 1000))
-        return state
+        parsed = _parse_plan(text)
+        new_state: AgentState = {
+            **state,
+            "plan": parsed.get("plan") or "",
+            "token_usage": _accumulate(state, usage),
+        }
+        if parsed.get("clarify") and parsed.get("clarifying_question"):
+            new_state["clarifying_question"] = str(parsed["clarifying_question"]).strip()
+        _span(
+            "plan",
+            new_state,
+            clarify=bool(new_state.get("clarifying_question")),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+        return new_state
     except Exception as exc:  # noqa: BLE001
         return {**state, "error": f"plan failed: {exc}"}
 
@@ -94,7 +168,7 @@ def node_write_code(state: AgentState) -> AgentState:
             prior += (
                 f"\n--- Step {step['step_index']} code ---\n{step['code']}\n"
                 f"stdout: {step.get('stdout', '')}\n"
-                f"result: {json.dumps(step.get('result_json'))[:1500]}\n"
+                f"result (masked/aggregated): {_masked_result(step, 1500)}\n"
                 f"error: {step.get('error')}\n"
             )
         user = (
@@ -185,7 +259,7 @@ def node_reflect(state: AgentState) -> AgentState:
             f"PLAN:\n{state.get('plan', '')}\n\n"
             f"LATEST STEP:\ncode:\n{last.get('code', '')}\n"
             f"stdout: {last.get('stdout', '')}\n"
-            f"result: {json.dumps(last.get('result_json'))[:1500]}\n"
+            f"result (masked/aggregated): {_masked_result(last, 1500)}\n"
             f"error: {last.get('error')}"
         )
         text, usage = _call_llm(user, system=_prompt("reflect"))
@@ -221,7 +295,7 @@ def node_answer(state: AgentState) -> AgentState:
             steps_summary += (
                 f"\n--- Step {step['step_index']} ---\ncode:\n{step['code']}\n"
                 f"stdout: {step.get('stdout', '')}\n"
-                f"result: {json.dumps(step.get('result_json'))[:2000]}\n"
+                f"result (masked/aggregated): {_masked_result(step, 2000)}\n"
                 f"error: {step.get('error')}\n"
             )
         user = (
@@ -233,17 +307,65 @@ def node_answer(state: AgentState) -> AgentState:
         assumptions: list = []
         if state.get("current_step", 0) >= state.get("max_steps", 6) and not state.get("reflect_done"):
             assumptions.append("Answer produced after reaching the step limit; may be incomplete.")
-        state = {
+        # Chart-spec + summary table derived from the last SUCCESSFUL local result
+        # (never from raw data, never via the LLM). Null when not chartable.
+        chart_spec = None
+        for step in reversed(state.get("steps", [])):
+            if not step.get("error") and step.get("result_json") is not None:
+                chart_spec = build_chart_spec(step.get("result_json"))
+                break
+        new_state = {
             **state,
             "answer": text.strip(),
             "shown_code": list(state.get("steps", [])),
             "assumptions": assumptions,
+            "chart_spec": chart_spec,
             "token_usage": _accumulate(state, usage),
         }
-        _span("answer", state, duration_ms=int((time.perf_counter() - start) * 1000))
-        return state
+        _span(
+            "answer",
+            new_state,
+            chart=bool(chart_spec),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+        return new_state
     except Exception as exc:  # noqa: BLE001
         return {**state, "error": f"answer failed: {exc}"}
+
+
+def node_suggest(state: AgentState) -> AgentState:
+    """Produce 2-3 concrete follow-up questions (light gemini-2.5-flash).
+
+    Degrades gracefully — a failure here yields no suggestions rather than
+    failing the whole query (the answer is already produced).
+    """
+    start = time.perf_counter()
+    try:
+        user = (
+            f"QUESTION:\n{state['question']}\n\n"
+            f"ANSWER:\n{state.get('answer', '')}\n\n"
+            f"DATASET SCHEMA (available columns — reference these):\n"
+            f"{state.get('schema_context', '')}"
+        )
+        text, usage = _call_llm(
+            user, system=_prompt("suggest"), model=get_settings().suggest_model
+        )
+        suggestions = _parse_suggestions(text)
+        new_state = {
+            **state,
+            "suggestions": suggestions,
+            "token_usage": _accumulate(state, usage),
+        }
+        _span(
+            "suggest",
+            new_state,
+            count=len(suggestions),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+        return new_state
+    except Exception as exc:  # noqa: BLE001 — degrade, never fail the answer
+        _log.warn("suggest_failed", run_id=state.get("run_id"), error=str(exc))
+        return {**state, "suggestions": state.get("suggestions") or []}
 
 
 def node_finalize(state: AgentState) -> AgentState:

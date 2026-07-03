@@ -52,6 +52,37 @@ Tests hit the real Gemini API using the key in `.env` (they skip only if no key 
 
 ---
 
+## Phase 2 — Conversation, Charts & Guidance
+
+Phase 2 turns the single-shot Q&A into a real analysis **session**:
+
+- **Conversation memory / sessions** — a `POST /api/sessions` opens a conversation over one or more datasets; every `POST /api/queries` belongs to a session (one is auto-created if you omit `session_id`). Prior `{question, answer}` turns are loaded into the agent's `plan` node so follow-ups like "and just for 2024?" resolve **without restating context**. History is truncated to the most recent `AGENT_HISTORY_MAX_TURNS` turns (default 8).
+- **Clarifying questions** — when a question is genuinely ambiguous, the agent returns a `clarifying_question` instead of guessing (no analysis steps run); if you re-ask without clarifying, it makes a best guess flagged in `assumptions`.
+- **Follow-up suggestions** — after each answer a light `node_suggest` (`gemini-2.5-flash`) returns 2–3 concrete follow-up questions that reference real columns (`suggestions`).
+- **Charts + summary tables** — `node_answer` derives a `chart_spec` (bar type + series + a `table` structure) from the **local result** (never raw data, never via the LLM) when the answer has a chartable breakdown; `null` otherwise.
+- **Token badge + high-spend warning** — real prompt/completion/total tokens are accumulated across all nodes into `token_usage`; `token_usage.warn` is `true` when the total exceeds `AGENT_TOKEN_WARN_THRESHOLD` (default 20000). Dollar cost is never shown.
+- **Result-feedback masking** — a step's `result_json` is masked/aggregated (via `src/analysis/masking.py:mask_result_feedback`) before it re-enters any LLM prompt in the write-code/reflect/answer loop; the FULL unmasked result is still persisted on the `AnalysisStep` audit row (local only).
+
+New endpoints: `POST /api/sessions` (create a session over `dataset_ids`), `GET /api/sessions/{id}` (ordered Query history). `POST /api/queries` now accepts an optional `session_id` and returns `chart_spec`, `suggestions`, `clarifying_question`, and `token_usage.warn`.
+
+Optional Phase-2 env (all have sensible defaults):
+
+```
+AGENT_HISTORY_MAX_TURNS=8          # recent turns kept verbatim in plan context
+AGENT_TOKEN_WARN_THRESHOLD=20000   # total tokens above → warn badge
+AGENT_SUGGEST_MODEL=gemini-2.5-flash
+```
+
+### Phase 2 gate command
+
+```bash
+uv run alembic upgrade head && uv run pytest tests/phase2 -q
+```
+
+Still-stubbed until Phase 3: dataset-library sidebar, Excel/PDF upload, multi-file join, export.
+
+---
+
 ## About the harness (below) — Zero Shot SDD Harness for Building Agents
 
 Give it a one-line idea. Walk away with a working, tested, phased agent.

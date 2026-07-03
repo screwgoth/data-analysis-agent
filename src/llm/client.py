@@ -35,11 +35,17 @@ class LLMClient:
         return self._provider.call_model(prompt, system=system)
 
     def call_model_with_usage(
-        self, prompt: str, *, system: str | None = None
+        self, prompt: str, *, system: str | None = None, model: str | None = None
     ) -> tuple[str, dict]:
-        """Return (text, {prompt, completion, total}); usage is zeros if unsupported."""
+        """Return (text, {prompt, completion, total}); usage is zeros if unsupported.
+
+        ``model`` optionally overrides the provider's configured model for this
+        single call (used by the light suggest node).
+        """
         gen = getattr(self._provider, "generate", None)
         if gen is not None:
+            if model is not None:
+                return gen(prompt, system=system, model=model)
             return gen(prompt, system=system)
         return self._provider.call_model(prompt, system=system), {
             "prompt": 0,

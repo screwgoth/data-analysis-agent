@@ -38,7 +38,7 @@ export function QuestionBox({
             value={question}
             onChange={e => setQuestion(e.target.value)}
             disabled={running}
-            placeholder="e.g. What is the total revenue by region?"
+            placeholder="e.g. What is the total revenue by region?  (then follow up: and just for 2024?)"
             className="w-full rounded-lg border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
             onKeyDown={e => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(e)

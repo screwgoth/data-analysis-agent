@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api._common import ok, api_error
-from db.models import Dataset
+from db.models import AnalysisSession, Dataset
 from db.session import get_session
 from graph.runner import load_query_response, run_query
 from observability.events import get_logger
@@ -31,7 +31,19 @@ def create_query(req: QueryRequest, session: Session = Depends(get_session)) -> 
         if session.get(Dataset, did) is None:
             raise api_error("UNKNOWN_DATASET", f"Unknown dataset_id: {did}", 400)
 
-    run_id = run_query(req.question, req.dataset_ids, req.session_id)
+    # Resolve the session: use the supplied one, or open a new session over
+    # these datasets so every query belongs to a conversation (Phase 2).
+    session_id = req.session_id
+    if session_id is None:
+        new_session = AnalysisSession(dataset_ids=list(req.dataset_ids))
+        session.add(new_session)
+        session.flush()
+        session_id = new_session.id
+        session.commit()
+    elif session.get(AnalysisSession, session_id) is None:
+        raise api_error("UNKNOWN_SESSION", f"Unknown session_id: {session_id}", 400)
+
+    run_id = run_query(req.question, req.dataset_ids, session_id)
     response = load_query_response(run_id)
     if not response:
         raise api_error("NOT_FOUND", "Query not found after run", 500)
